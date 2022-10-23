@@ -7,6 +7,7 @@ import (
         "fmt"
         "io"
         "strings"
+	"strconv"
         "github.com/spf13/viper"
         "github.com/natefinch/lumberjack"
         "github.com/go-resty/resty/v2"
@@ -117,6 +118,12 @@ func myUsage() {
 func getTibber() {
         var tibberquery string = `{ "query": "{viewer {homes {currentSubscription {priceInfo {current {total startsAt} today {total startsAt} tomorrow {total startsAt}}}}}}"}`
         var total string
+	var ftotal float64 = 0
+	var ftomorrow float64 = 0
+	var topic string = "topic/out/"
+	var temp string
+	var ctotal int8 = 0
+	var ctomorrow int8 = 0
 
         token := mclient.Publish("topic/out/state", 0, false, "on")
         token.Wait()
@@ -140,16 +147,27 @@ func getTibber() {
                                 total = i.Value();
                         }
                         if i.Key() == "startsAt" {
-                                var topic string = "topic/out/"
-                                var temp string
                                 temp = topic + "total" + i.Value()[11:13]
                                 if strings.Contains(i.Path(), "tomorrow"){
                                         temp = topic + "tomorrow" + i.Value()[11:13]
-                                } 
+                                        val,_ := strconv.ParseFloat(total,64)
+                                        ftomorrow += val
+					ctomorrow++ 
+                                } else {
+					val,_ := strconv.ParseFloat(total,64)
+					ftotal += val
+					ctotal++ 
+				}  
                                 fmt.Printf("At %s, total %s \n", i.Value(), total)
                                 token = mclient.Publish(temp, 0, false, total)
                                 token.Wait()
                         }
+                        temp = topic + "totalmean"
+			token = mclient.Publish(temp, 0, false, fmt.Sprintf("%.4f",ftotal/float64(ctotal)))
+			token.Wait()
+                        temp = topic + "tomorrowmean"
+                        token = mclient.Publish(temp, 0, false, fmt.Sprintf("%.4f",ftomorrow/float64(ctomorrow)))
+                        token.Wait()
                         return false // No Error, resume scanning
                 })
         } else {
