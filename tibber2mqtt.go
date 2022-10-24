@@ -124,6 +124,11 @@ func getTibber() {
 	var temp string
 	var ctotal int8 = 0
 	var ctomorrow int8 = 0
+	var mintotal float64 = 99
+	var maxtotal float64 = 0
+	var diff float64 = 0
+	var m1 float64 = 0
+	var m2 float64 = 0
 
         token := mclient.Publish("topic/out/state", 0, false, "on")
         token.Wait()
@@ -157,19 +162,42 @@ func getTibber() {
 					val,_ := strconv.ParseFloat(total,64)
 					ftotal += val
 					ctotal++ 
-				}  
-                                fmt.Printf("At %s, total %s \n", i.Value(), total)
+					if val < mintotal {
+						mintotal = val
+					}
+                                        if val > maxtotal {
+                                                maxtotal = val
+                                        }
+				}
                                 token = mclient.Publish(temp, 0, false, total)
                                 token.Wait()
                         }
-                        temp = topic + "totalmean"
-			token = mclient.Publish(temp, 0, false, fmt.Sprintf("%.4f",ftotal/float64(ctotal)))
-			token.Wait()
-                        temp = topic + "tomorrowmean"
-                        token = mclient.Publish(temp, 0, false, fmt.Sprintf("%.4f",ftomorrow/float64(ctomorrow)))
-                        token.Wait()
                         return false // No Error, resume scanning
                 })
+                temp = topic + "totalmean"
+                token = mclient.Publish(temp, 0, false, fmt.Sprintf("%.4f",ftotal/float64(ctotal)))
+                token.Wait()
+                temp = topic + "tomorrowmean"
+                token = mclient.Publish(temp, 0, false, fmt.Sprintf("%.4f",ftomorrow/float64(ctomorrow)))
+                token.Wait()
+		diff = maxtotal - mintotal
+		diff = diff / 3
+		m1 = mintotal + diff
+		m2 = m1 + diff
+                mintotal += float64(0.01)
+                maxtotal -= float64(0.01)
+                temp = topic + "mintotal"
+                token = mclient.Publish(temp, 0, false, fmt.Sprintf("%.4f",mintotal))
+                token.Wait()
+                temp = topic + "maxtotal"
+                token = mclient.Publish(temp, 0, false, fmt.Sprintf("%.4f",maxtotal))
+                token.Wait()
+                temp = topic + "m1"
+                token = mclient.Publish(temp, 0, false, fmt.Sprintf("%.4f",m1))
+                token.Wait()
+                temp = topic + "m2"
+                token = mclient.Publish(temp, 0, false, fmt.Sprintf("%.4f",m2))
+                token.Wait()
         } else {
                 fmt.Println(err)
         }
