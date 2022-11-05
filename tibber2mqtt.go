@@ -185,7 +185,7 @@ func getTibber() {
 		m1 = mintotal + diff
 		m2 = m1 + diff
                 mintotal += float64(0.01)
-                maxtotal -= float64(0.01)
+//                maxtotal -= float64(0.01)
                 temp = topic + "mintotal"
                 token = mclient.Publish(temp, 0, false, fmt.Sprintf("%.4f",mintotal))
                 token.Wait()
