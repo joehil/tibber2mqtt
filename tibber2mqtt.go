@@ -23,8 +23,8 @@ var tibbertoken string
 
 var ownlogger io.Writer
 
-var broker = "192.168.0.211"
-var port = 1883
+var mqttserver string
+var mqttport string
 
 var mclient mqtt.Client
 var opts = mqtt.NewClientOptions()
@@ -37,7 +37,7 @@ func main() {
 // Read config
         read_config()
 
-        opts.AddBroker(fmt.Sprintf("tcp://%s:%d", broker, port))
+        opts.AddBroker(fmt.Sprintf("tcp://%s:%s", mqttserver, mqttport))
         opts.SetClientID("tibber2mqtt")
 //      opts.SetUsername("emqx")
 //      opts.SetPassword("public")
@@ -53,7 +53,7 @@ func main() {
         if len(os.Args) > 1 {
                 a1 := os.Args[1]
                 if a1 == "readPrices" {
-                        getTibber()
+                        getTibberPrices()
                         os.Exit(0)
                 }
                 fmt.Println("parameter invalid")
@@ -87,6 +87,8 @@ func read_config() {
 
         tibberurl = viper.GetString("tibberurl")
         tibbertoken = viper.GetString("tibbertoken")
+        mqttserver = viper.GetString("mqttserver")
+        mqttport = viper.GetString("mqttport")
 
         if do_trace {
                 log.Println("do_trace: ",do_trace)
@@ -99,7 +101,7 @@ var messagePubHandler mqtt.MessageHandler = func(client mqtt.Client, msg mqtt.Me
 }
 
 var connectHandler mqtt.OnConnectHandler = func(client mqtt.Client) {
-    fmt.Printf("Connected to MQTT server %s\n",broker)
+    fmt.Printf("Connected to MQTT server %s\n",mqttserver)
 }
 
 var connectLostHandler mqtt.ConnectionLostHandler = func(client mqtt.Client, err error) {
@@ -109,13 +111,26 @@ var connectLostHandler mqtt.ConnectionLostHandler = func(client mqtt.Client, err
 func myUsage() {
      fmt.Printf("Usage: %s argument\n", os.Args[0])
      fmt.Println("Arguments:")
-     fmt.Println("backup        Backup the directories mentioned in the config file")
+     fmt.Println("readPrices    Read prices for today and tomorrow (only available after 1pm)")
      fmt.Println("list          List all backups")
      fmt.Println("fetch         Fetch backup from server")
      fmt.Println("decrypt       Decrypt backup")
 }
 
-func getTibber() {
+func SortASC(a []float64) []float64 {
+	for i := 0; i < len(a)-1; i++ {
+		for j := i + 1; j < len(a); j++ {
+			if a[i] >= a[j] {
+				temp := a[i]
+				a[i] = a[j]
+				a[j] = temp
+			}
+		}
+	}
+	return a
+}
+
+func getTibberPrices() {
         var tibberquery string = `{ "query": "{viewer {homes {currentSubscription {priceInfo {current {total startsAt} today {total startsAt} tomorrow {total startsAt}}}}}}"}`
         var total string
 	var ftotal float64 = 0
@@ -129,6 +144,8 @@ func getTibber() {
 	var diff float64 = 0
 	var m1 float64 = 0
 	var m2 float64 = 0
+
+	var prices []float64
 
         token := mclient.Publish("topic/out/state", 0, false, "on")
         token.Wait()
@@ -168,6 +185,7 @@ func getTibber() {
                                         if val > maxtotal {
                                                 maxtotal = val
                                         }
+					prices = append(prices,val)
 				}
                                 token = mclient.Publish(temp, 0, false, total)
                                 token.Wait()
@@ -185,7 +203,6 @@ func getTibber() {
 		m1 = mintotal + diff
 		m2 = m1 + diff
                 mintotal += float64(0.01)
-//                maxtotal -= float64(0.01)
                 temp = topic + "mintotal"
                 token = mclient.Publish(temp, 0, false, fmt.Sprintf("%.4f",mintotal))
                 token.Wait()
@@ -198,6 +215,13 @@ func getTibber() {
                 temp = topic + "m2"
                 token = mclient.Publish(temp, 0, false, fmt.Sprintf("%.4f",m2))
                 token.Wait()
+
+		prices = SortASC(prices)
+		for i := 0; i < len(prices)-1; i++ {
+                	temp = topic + "t" + fmt.Sprintf("%d",i)
+                	token = mclient.Publish(temp, 0, false, fmt.Sprintf("%.4f",prices[i]))
+                	token.Wait()
+		}
         } else {
                 fmt.Println(err)
         }
