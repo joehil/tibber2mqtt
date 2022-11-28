@@ -359,6 +359,7 @@ func subTibberPower(){
         }(h.msgChannal)
 
         for {
+		time.Sleep(10*time.Second)
         }
 
 }
