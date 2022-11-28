@@ -6,6 +6,7 @@ import (
 //      "encoding/json"
         "fmt"
         "io"
+	"time"
         "strings"
 	"strconv"
         "github.com/spf13/viper"
@@ -13,6 +14,9 @@ import (
         "github.com/go-resty/resty/v2"
         "github.com/romshark/jscan"
         mqtt "github.com/eclipse/paho.mqtt.golang"
+	"github.com/tskaard/tibber-golang"
+//	"github.com/hasura/go-graphql-client"
+//	"nhooyr.io/websocket"
 )
 
 var do_trace bool = true
@@ -20,6 +24,8 @@ var do_trace bool = true
 var ownlog string
 var tibberurl string
 var tibbertoken string
+var tibberws string
+var tibberhomeid string
 
 var ownlogger io.Writer
 
@@ -29,7 +35,14 @@ var mqttport string
 var mclient mqtt.Client
 var opts = mqtt.NewClientOptions()
 
+var start_time time.Time
+var elapsed time.Duration
+
 func main() {
+	start_time = time.Now()
+	t := time.Now()
+	elapsed = t.Sub(start_time)
+
 // Set location of config 
         viper.SetConfigName("tibber2mqtt") // name of config file (without extension)
         viper.AddConfigPath("/etc/")   // path to look for the config file in
@@ -54,6 +67,20 @@ func main() {
                 a1 := os.Args[1]
                 if a1 == "readPrices" {
                         getTibberPrices()
+                        os.Exit(0)
+                }
+                if a1 == "subPower" {
+			getTibberSubUrl()
+			getTibberHomeId()
+                        subTibberPower()
+                        os.Exit(0)
+                }
+                if a1 == "getSubUrl" {
+                        getTibberSubUrl()
+                        os.Exit(0)
+                }
+               	if a1 == "getHomeId" {
+                        getTibberHomeId()
                         os.Exit(0)
                 }
                 fmt.Println("parameter invalid")
@@ -112,9 +139,9 @@ func myUsage() {
      fmt.Printf("Usage: %s argument\n", os.Args[0])
      fmt.Println("Arguments:")
      fmt.Println("readPrices    Read prices for today and tomorrow (only available after 1pm)")
-     fmt.Println("list          List all backups")
-     fmt.Println("fetch         Fetch backup from server")
-     fmt.Println("decrypt       Decrypt backup")
+     fmt.Println("subPower      Subscribe to webservice to get current power consumption")
+     fmt.Println("getSubUrl	Get Url to use for subscriptions")
+     fmt.Println("getHomeId     Get ID of active home")
 }
 
 func SortASC(a []float64) []float64 {
@@ -226,3 +253,124 @@ func getTibberPrices() {
                 fmt.Println(err)
         }
 }
+
+func getTibberSubUrl(){
+        var tibberquery string = `{ "query": "{viewer {websocketSubscriptionUrl } }"}`
+        // Create a Resty Client
+        client := resty.New()
+
+        // POST JSON string
+        // No need to set content type, if you have client level setting
+        resp, err := client.R().
+                SetHeader("Content-Type", "application/json").
+                SetBody(tibberquery).
+                SetAuthToken(tibbertoken).
+                Post(tibberurl)
+        if err == nil {
+                err = jscan.Scan(jscan.Options{
+                        CachePath:  true,
+                        EscapePath: true,
+                }, string(resp.Body()), func(i *jscan.Iterator) (err bool) {
+                        if i.Key() == "websocketSubscriptionUrl" {
+                                tibberws = i.Value()
+				fmt.Println(tibberws)
+                        }
+			return false
+                })
+        } else {
+                fmt.Println(err)
+        }
+}
+
+func getTibberHomeId(){
+	var homeid string
+        var tibberquery string = `{ "query": "{viewer {homes {id features {realTimeConsumptionEnabled } } } }"}`
+        // Create a Resty Client
+        client := resty.New()
+
+        // POST JSON string
+        // No need to set content type, if you have client level setting
+        resp, err := client.R().
+                SetHeader("Content-Type", "application/json").
+                SetBody(tibberquery).
+                SetAuthToken(tibbertoken).
+                Post(tibberurl)
+        if err == nil {
+                err = jscan.Scan(jscan.Options{
+                        CachePath:  true,
+                        EscapePath: true,
+                }, string(resp.Body()), func(i *jscan.Iterator) (err bool) {
+                        if i.Key() == "id" {
+                                homeid = i.Value()
+                        }
+                        if i.Key() == "realTimeConsumptionEnabled" {
+				if i.Value() == "true" {
+                                	tibberhomeid = homeid
+                                }
+                        }
+                        return false
+                })
+        } else {
+                fmt.Println(err)
+        }
+	fmt.Println(tibberhomeid)
+}
+
+type Handler struct {
+        tibber     *tibber.Client
+        streams    map[string]*tibber.Stream
+        msgChannal tibber.MsgChan
+}
+
+func NewHandler() *Handler {
+        h := &Handler{}
+        h.tibber = tibber.NewClient("")
+        h.streams = make(map[string]*tibber.Stream)
+        h.msgChannal = make(tibber.MsgChan)
+        return h
+}
+
+func subTibberPower(){
+    h := NewHandler()
+        h.tibber.Token = tibbertoken
+        homes, err := h.tibber.GetHomes()
+        if err != nil {
+                panic("Can not get homes from Tibber")
+        }
+        for _, home := range homes {
+                fmt.Println(home.ID)
+                if home.Features.RealTimeConsumptionEnabled {
+                        stream := tibber.NewStream(home.ID, h.tibber.Token)
+                        stream.StartSubscription(h.msgChannal)
+                        h.streams[home.ID] = stream
+                }
+        }
+        _, err = h.tibber.SendPushNotification("Tibber-Golang", "Message from GO")
+        if err != nil {
+                panic("Push failed")
+        }
+        go func(msgChan tibber.MsgChan) {
+                for {
+                        select {
+                        case msg := <-msgChan:
+                                h.handleStreams(msg)
+                        }
+                }
+        }(h.msgChannal)
+
+        for {
+        }
+
+}
+
+func (h *Handler) handleStreams(newMsg *tibber.StreamMsg) {
+	t := time.Now()
+	elapsed = t.Sub(start_time)
+	if elapsed > 60000000000 {
+        	token := mclient.Publish("topic/out/livePower", 0, false, fmt.Sprintf("%.0f",newMsg.Payload.Data.LiveMeasurement.Power))
+        	token.Wait()
+		start_time = time.Now()
+	}
+}
+
+
