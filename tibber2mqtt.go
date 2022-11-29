@@ -370,6 +370,10 @@ func (h *Handler) handleStreams(newMsg *tibber.StreamMsg) {
 	if elapsed > 60000000000 {
         	token := mclient.Publish("topic/out/livePower", 0, false, fmt.Sprintf("%.0f",newMsg.Payload.Data.LiveMeasurement.Power))
         	token.Wait()
+                token = mclient.Publish("topic/out/accPower", 0, false, fmt.Sprintf("%.3f",newMsg.Payload.Data.LiveMeasurement.AccumulatedConsumption))
+                token.Wait()
+                token = mclient.Publish("topic/out/accCost", 0, false, fmt.Sprintf("%.2f",newMsg.Payload.Data.LiveMeasurement.AccumulatedCost))
+                token.Wait()
 		start_time = time.Now()
 	}
 }
