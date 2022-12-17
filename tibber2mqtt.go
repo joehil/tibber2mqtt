@@ -231,6 +231,9 @@ func getTibberPrices() {
 		m2 = m1 + diff
                 mintotal += float64(0.01)
                 temp = topic + "mintotal"
+		if mintotal > float64(1) {
+			mintotal = float64(0.2)
+		}
                 token = mclient.Publish(temp, 0, false, fmt.Sprintf("%.4f",mintotal))
                 token.Wait()
                 temp = topic + "maxtotal"
