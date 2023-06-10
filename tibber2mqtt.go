@@ -3,9 +3,11 @@ package main
 import (
         "log"
         "os"
-//      "encoding/json"
+        "encoding/json"
+        "container/list"
         "fmt"
         "io"
+	"net/http"
 	"time"
         "strings"
 	"strconv"
@@ -14,9 +16,7 @@ import (
         "github.com/go-resty/resty/v2"
         "github.com/romshark/jscan"
         mqtt "github.com/eclipse/paho.mqtt.golang"
-	"github.com/tskaard/tibber-golang"
-//	"github.com/hasura/go-graphql-client"
-//	"nhooyr.io/websocket"
+	"github.com/hasura/go-graphql-client"
 )
 
 var do_trace bool = true
@@ -38,10 +38,18 @@ var opts = mqtt.NewClientOptions()
 var start_time time.Time
 var elapsed time.Duration
 
+var queue *list.List
+
+type headerRoundTripper struct {
+	setHeaders func(req *http.Request)
+	rt         http.RoundTripper
+}
+
 func main() {
 	start_time = time.Now()
 	t := time.Now()
 	elapsed = t.Sub(start_time)
+        queue = list.New()
 
 // Set location of config 
         viper.SetConfigName("tibber2mqtt") // name of config file (without extension)
@@ -325,70 +333,118 @@ func getTibberHomeId(){
 	fmt.Println(tibberhomeid)
 }
 
-type Handler struct {
-        tibber     *tibber.Client
-        streams    map[string]*tibber.Stream
-        msgChannal tibber.MsgChan
-}
+func subTibberPower() error {
+	// get the demo token from the graphiql playground
+	demoToken := tibbertoken
+	if demoToken == "" {
+		panic("Token is required")
+	}
 
-func NewHandler() *Handler {
-        h := &Handler{}
-        h.tibber = tibber.NewClient("")
-        h.streams = make(map[string]*tibber.Stream)
-        h.msgChannal = make(tibber.MsgChan)
-        return h
-}
+	client := graphql.NewSubscriptionClient(tibberws).
+		WithProtocol(graphql.GraphQLWS).
+		WithWebSocketOptions(graphql.WebsocketOptions{
+			HTTPClient: &http.Client{
+				Transport: headerRoundTripper{
+					setHeaders: func(req *http.Request) {
+						req.Header.Set("User-Agent", "go-graphql-client/0.9.0")
+					},
+					rt: http.DefaultTransport,
+				},
+			},
+		}).
+		WithConnectionParams(map[string]interface{}{
+			"token": demoToken,
+		}).WithLog(log.Println).
+		OnError(func(sc *graphql.SubscriptionClient, err error) error {
+			panic(err)
+		})
 
-func subTibberPower(){
-    h := NewHandler()
-        h.tibber.Token = tibbertoken
-        homes, err := h.tibber.GetHomes()
-        if err != nil {
-                panic("Can not get homes from Tibber")
-        }
-        for _, home := range homes {
-                fmt.Println(home.ID)
-                if home.Features.RealTimeConsumptionEnabled {
-                        stream := tibber.NewStream(home.ID, h.tibber.Token)
-                        stream.StartSubscription(h.msgChannal)
-                        h.streams[home.ID] = stream
-                }
-        }
-        _, err = h.tibber.SendPushNotification("Tibber-Golang", "Message from GO")
-        if err != nil {
-                panic("Push failed")
-        }
-        go func(msgChan tibber.MsgChan) {
-                for {
-                        select {
-                        case msg := <-msgChan:
-                                h.handleStreams(msg)
+	defer client.Close()
+
+	var sub struct {
+		LiveMeasurement struct {
+			Power                  int       `graphql:"power"`
+                        PowerProduction        int       `graphql:"powerProduction"`
+			AccumulatedConsumption float64   `graphql:"accumulatedConsumption"`
+			AccumulatedCost        float64   `graphql:"accumulatedCost"`
+		} `graphql:"liveMeasurement(homeId: $homeId)"`
+	}
+
+	variables := map[string]interface{}{
+		"homeId": graphql.ID(tibberhomeid),
+	}
+	_, err := client.Subscribe(sub, variables, func(data []byte, err error) error {
+
+		if err != nil {
+			fmt.Println("ERROR: ", err)
+			return nil
+		}
+
+		if data == nil {
+			return nil
+		}
+
+                fmt.Println(string(data))
+
+                var tLive map[string]interface{}
+                var power float64
+                var powerProd float64
+
+                err = json.Unmarshal([]byte(data), &tLive)
+	        if err != nil {
+		        fmt.Printf("could not unmarshal json: %s\n", err)
+		        return nil
+	        }
+
+                measure := tLive["liveMeasurement"].(map[string]interface{})
+
+                for key, value := range measure {
+                        // Each value is an `any` type, that is type asserted as a string
+                        if key == "power" {
+                           power = value.(float64)
+                        }
+                        if key == "powerProduction" {
+                           powerProd = value.(float64)
                         }
                 }
-        }(h.msgChannal)
 
-        for {
-		time.Sleep(10*time.Second)
-        }
+                var powerGes float64 = power - powerProd
 
-}
+                fmt.Printf("%0.0f\n",powerGes)
 
-func (h *Handler) handleStreams(newMsg *tibber.StreamMsg) {
-	t := time.Now()
-	elapsed = t.Sub(start_time)
-	if elapsed > 60000000000 {
-        	token := mclient.Publish("topic/out/livePower", 0, false, fmt.Sprintf("%.0f",newMsg.Payload.Data.LiveMeasurement.Power))
-        	token.Wait()
-                token = mclient.Publish("topic/out/liveProduction", 0, false, fmt.Sprintf("%.0f",newMsg.Payload.Data.LiveMeasurement.PowerProduction))
+                token := mclient.Publish("topic/out/", 0, false, fmt.Sprintf("%v",string(data)))
+                token.Wait() 
+                token = mclient.Publish("topic/out/powerGes", 0, false, fmt.Sprintf("%0.0f",powerGes))
                 token.Wait()
-                token = mclient.Publish("topic/out/accPower", 0, false, fmt.Sprintf("%.3f",newMsg.Payload.Data.LiveMeasurement.AccumulatedConsumption))
+
+                var powerAvg float64 = float64(0)
+
+                queue.PushBack(powerGes)
+                if queue.Len() > 5 {
+                        e := queue.Front()
+                        queue.Remove(e)
+                        for e := queue.Front(); e != nil; e = e.Next() {
+                            f := e.Value.(float64)
+	                    powerAvg += f
+                        }
+                        powerAvg = powerAvg / 5
+                }
+
+                token = mclient.Publish("topic/out/powerAvg", 0, false, fmt.Sprintf("%0.0f",powerAvg))
                 token.Wait()
-                token = mclient.Publish("topic/out/accProduction", 0, false, fmt.Sprintf("%.3f",newMsg.Payload.Data.LiveMeasurement.AccumulatedProduction))
-                token.Wait()
-                token = mclient.Publish("topic/out/accCost", 0, false, fmt.Sprintf("%.2f",newMsg.Payload.Data.LiveMeasurement.AccumulatedCost))
-                token.Wait()
-		start_time = time.Now()
+
+		return nil
+	})
+
+	if err != nil {
+		panic(err)
 	}
+
+	return client.Run()
 }
 
+func (h headerRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	h.setHeaders(req)
+	return h.rt.RoundTrip(req)
+}
 

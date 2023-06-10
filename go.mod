@@ -5,6 +5,7 @@ go 1.16
 require (
 	github.com/eclipse/paho.mqtt.golang v1.4.1
 	github.com/go-resty/resty/v2 v2.7.0
+	github.com/hasura/go-graphql-client v0.9.3 // indirect
 	github.com/natefinch/lumberjack v2.0.0+incompatible
 	github.com/romshark/jscan v1.1.0
 	github.com/spf13/viper v1.9.0
