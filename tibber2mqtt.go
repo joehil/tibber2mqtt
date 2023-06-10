@@ -4,7 +4,6 @@ import (
         "log"
         "os"
         "encoding/json"
-        "container/list"
         "fmt"
         "io"
 	"net/http"
@@ -38,8 +37,6 @@ var opts = mqtt.NewClientOptions()
 var start_time time.Time
 var elapsed time.Duration
 
-var queue *list.List
-
 type headerRoundTripper struct {
 	setHeaders func(req *http.Request)
 	rt         http.RoundTripper
@@ -49,7 +46,6 @@ func main() {
 	start_time = time.Now()
 	t := time.Now()
 	elapsed = t.Sub(start_time)
-        queue = list.New()
 
 // Set location of config 
         viper.SetConfigName("tibber2mqtt") // name of config file (without extension)
@@ -389,6 +385,8 @@ func subTibberPower() error {
                 var tLive map[string]interface{}
                 var power float64
                 var powerProd float64
+                var accCons float64
+                var accCost float64
 
                 err = json.Unmarshal([]byte(data), &tLive)
 	        if err != nil {
@@ -406,6 +404,12 @@ func subTibberPower() error {
                         if key == "powerProduction" {
                            powerProd = value.(float64)
                         }
+                        if key == "accumulatedConsumption" {
+                           accCons = value.(float64)
+                        }
+                        if key == "accumulatedCost" {
+                           accCost = value.(float64)
+                        }
                 }
 
                 var powerGes float64 = power - powerProd
@@ -417,20 +421,9 @@ func subTibberPower() error {
                 token = mclient.Publish("topic/out/powerGes", 0, false, fmt.Sprintf("%0.0f",powerGes))
                 token.Wait()
 
-                var powerAvg float64 = float64(0)
+                var priceAvg float64 = accCost / accCons
 
-                queue.PushBack(powerGes)
-                if queue.Len() > 5 {
-                        e := queue.Front()
-                        queue.Remove(e)
-                        for e := queue.Front(); e != nil; e = e.Next() {
-                            f := e.Value.(float64)
-	                    powerAvg += f
-                        }
-                        powerAvg = powerAvg / 5
-                }
-
-                token = mclient.Publish("topic/out/powerAvg", 0, false, fmt.Sprintf("%0.0f",powerAvg))
+                token = mclient.Publish("topic/out/priceAvg", 0, false, fmt.Sprintf("%0.4f",priceAvg))
                 token.Wait()
 
 		return nil
