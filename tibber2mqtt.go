@@ -380,7 +380,7 @@ func subTibberPower() error {
 			return nil
 		}
 
-                fmt.Println(string(data))
+                fmt.Printf("%s :: %s\n",time.Now().Format(time.RFC850),string(data))
 
                 var tLive map[string]interface{}
                 var power float64
@@ -413,8 +413,6 @@ func subTibberPower() error {
                 }
 
                 var powerGes float64 = power - powerProd
-
-                fmt.Printf("%0.0f\n",powerGes)
 
                 token := mclient.Publish("topic/out/", 0, false, fmt.Sprintf("%v",string(data)))
                 token.Wait() 
