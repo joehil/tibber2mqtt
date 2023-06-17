@@ -149,16 +149,18 @@ func myUsage() {
 }
 
 func SortASC(a []float64) []float64 {
-	for i := 0; i < len(a)-1; i++ {
-		for j := i + 1; j < len(a); j++ {
-			if a[i] >= a[j] {
-				temp := a[i]
-				a[i] = a[j]
-				a[j] = temp
+        b := make([]float64, len(a))
+        copy(b, a)
+	for i := 0; i < len(b)-1; i++ {
+		for j := i + 1; j < len(b); j++ {
+			if b[i] >= b[j] {
+				temp := b[i]
+				b[i] = b[j]
+				b[j] = temp
 			}
 		}
 	}
-	return a
+	return b
 }
 
 func getTibberPrices() {
@@ -256,12 +258,19 @@ func getTibberPrices() {
                 token = mclient.Publish(temp, 0, false, fmt.Sprintf("%.4f",m2))
                 token.Wait()
 
-		prices = SortASC(prices)
-		for i := 0; i < len(prices)-1; i++ {
+		pricest := SortASC(prices)
+		for i := 1; i < len(pricest); i++ {
                 	temp = topic + "t" + fmt.Sprintf("%d",i)
-                	token = mclient.Publish(temp, 0, false, fmt.Sprintf("%.4f",prices[i]))
+                	token = mclient.Publish(temp, 0, false, fmt.Sprintf("%.4f",pricest[i-1]))
                 	token.Wait()
 		}
+
+                pricesn := SortASC(prices[0:6])
+                for i := 1; i < 7; i++ {
+                        temp = topic + "n" + fmt.Sprintf("%d",i)
+                        token = mclient.Publish(temp, 0, false, fmt.Sprintf("%.4f",pricesn[i-1]))
+                        token.Wait()
+                }
         } else {
                 fmt.Println(err)
         }
