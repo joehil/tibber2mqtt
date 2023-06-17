@@ -342,6 +342,7 @@ func subTibberPower() error {
 	// get the demo token from the graphiql playground
 	demoToken := tibbertoken
 	if demoToken == "" {
+                fmt.Println("Token is required")
 		panic("Token is required")
 	}
 
@@ -361,6 +362,7 @@ func subTibberPower() error {
 			"token": demoToken,
 		}).WithLog(log.Println).
 		OnError(func(sc *graphql.SubscriptionClient, err error) error {
+                        fmt.Println(err)
 			panic(err)
 		})
 
@@ -386,6 +388,7 @@ func subTibberPower() error {
 		}
 
 		if data == nil {
+                        fmt.Println("No data found")
 			return nil
 		}
 
@@ -437,6 +440,7 @@ func subTibberPower() error {
 	})
 
 	if err != nil {
+                fmt.Println(err)
 		panic(err)
 	}
 
