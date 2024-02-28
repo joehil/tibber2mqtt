@@ -61,19 +61,28 @@ func main() {
         opts.SetDefaultPublishHandler(messagePubHandler)
         opts.OnConnect = connectHandler
         opts.OnConnectionLost = connectLostHandler
-        mclient = mqtt.NewClient(opts)
-        if token := mclient.Connect(); token.Wait() && token.Error() != nil {
-                panic(token.Error())
-        }
+//        mclient = mqtt.NewClient(opts)
+//        if token := mclient.Connect(); token.Wait() && token.Error() != nil {
+//                panic(token.Error())
+//        }
 
 // Get commandline args
         if len(os.Args) > 1 {
                 a1 := os.Args[1]
                 if a1 == "readPrices" {
+			opts.SetClientID("tibber2mqttsingle")
+                        mclient = mqtt.NewClient(opts)
+                        if token := mclient.Connect(); token.Wait() && token.Error() != nil {
+                                panic(token.Error())
+                        }
                         getTibberPrices()
                         os.Exit(0)
                 }
                 if a1 == "subPower" {
+        		mclient = mqtt.NewClient(opts)
+        		if token := mclient.Connect(); token.Wait() && token.Error() != nil {
+                		panic(token.Error())
+        		}
 			getTibberSubUrl()
 			getTibberHomeId()
                         subTibberPower()
@@ -142,10 +151,10 @@ var connectLostHandler mqtt.ConnectionLostHandler = func(client mqtt.Client, err
 func myUsage() {
      fmt.Printf("Usage: %s argument\n", os.Args[0])
      fmt.Println("Arguments:")
-     fmt.Println("readPrices    Read prices for today and tomorrow (only available after 1pm)")
-     fmt.Println("subPower      Subscribe to webservice to get current power consumption")
+     fmt.Println("readPrices	Read prices for today and tomorrow (only available after 1pm)")
+     fmt.Println("subPower	Subscribe to webservice to get current power consumption")
      fmt.Println("getSubUrl	Get Url to use for subscriptions")
-     fmt.Println("getHomeId     Get ID of active home")
+     fmt.Println("getHomeId	Get ID of active home")
 }
 
 func SortASC(a []float64) []float64 {
