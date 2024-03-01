@@ -177,7 +177,7 @@ func getTibberPrices() {
         var total string
 	var ftotal float64 = 0
 	var ftomorrow float64 = 0
-	var topic string = "topic/out/"
+	var topic string = "tibber2mqtt/out/"
 	var temp string
 	var ctotal int8 = 0
 	var ctomorrow int8 = 0
@@ -189,7 +189,7 @@ func getTibberPrices() {
 
 	var prices []float64
 
-        token := mclient.Publish("topic/out/state", 0, false, "on")
+        token := mclient.Publish("tibber2mqtt/out/state", 0, false, "on")
         token.Wait()
 
         // Create a Resty Client
@@ -435,14 +435,14 @@ func subTibberPower() error {
 
                 var powerGes float64 = power - powerProd
 
-                token := mclient.Publish("topic/out/", 0, false, fmt.Sprintf("%v",string(data)))
+                token := mclient.Publish("tibber2mqtt/out/", 0, false, fmt.Sprintf("%v",string(data)))
                 token.Wait() 
-                token = mclient.Publish("topic/out/powerGes", 0, false, fmt.Sprintf("%0.0f",powerGes))
+                token = mclient.Publish("tibber2mqtt/out/powerGes", 0, false, fmt.Sprintf("%0.0f",powerGes))
                 token.Wait()
 
                 var priceAvg float64 = accCost / accCons
 
-                token = mclient.Publish("topic/out/priceAvg", 0, false, fmt.Sprintf("%0.4f",priceAvg))
+                token = mclient.Publish("tibber2mqtt/out/priceAvg", 0, false, fmt.Sprintf("%0.4f",priceAvg))
                 token.Wait()
 
 		return nil
