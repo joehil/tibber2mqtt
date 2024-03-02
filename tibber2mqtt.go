@@ -1,21 +1,24 @@
 package main
 
 import (
-        "log"
-        "os"
-        "encoding/json"
-        "fmt"
-        "io"
+	"encoding/json"
+	"fmt"
+	"io"
+	"log"
 	"net/http"
-	"time"
-        "strings"
+	"os"
+	"os/signal"
 	"strconv"
-        "github.com/spf13/viper"
-        "github.com/natefinch/lumberjack"
-        "github.com/go-resty/resty/v2"
-        "github.com/romshark/jscan"
-        mqtt "github.com/eclipse/paho.mqtt.golang"
+	"strings"
+	"syscall"
+	"time"
+
+	mqtt "github.com/eclipse/paho.mqtt.golang"
+	"github.com/go-resty/resty/v2"
 	"github.com/hasura/go-graphql-client"
+	"github.com/natefinch/lumberjack"
+	"github.com/romshark/jscan"
+	"github.com/spf13/viper"
 )
 
 var do_trace bool = true
@@ -47,119 +50,124 @@ func main() {
 	t := time.Now()
 	elapsed = t.Sub(start_time)
 
-// Set location of config 
-        viper.SetConfigName("tibber2mqtt") // name of config file (without extension)
-        viper.AddConfigPath("/etc/")   // path to look for the config file in
+	// Set location of config
+	viper.SetConfigName("tibber2mqtt") // name of config file (without extension)
+	viper.AddConfigPath("/etc/")       // path to look for the config file in
 
-// Read config
-        read_config()
+	// Read config
+	read_config()
 
-        opts.AddBroker(fmt.Sprintf("tcp://%s:%s", mqttserver, mqttport))
-        opts.SetClientID("tibber2mqtt")
-//      opts.SetUsername("emqx")
-//      opts.SetPassword("public")
-        opts.SetDefaultPublishHandler(messagePubHandler)
-        opts.OnConnect = connectHandler
-        opts.OnConnectionLost = connectLostHandler
-//        mclient = mqtt.NewClient(opts)
-//        if token := mclient.Connect(); token.Wait() && token.Error() != nil {
-//                panic(token.Error())
-//        }
+	opts.AddBroker(fmt.Sprintf("tcp://%s:%s", mqttserver, mqttport))
+	opts.SetClientID("tibber2mqtt")
+	//      opts.SetUsername("emqx")
+	//      opts.SetPassword("public")
+	opts.SetDefaultPublishHandler(messagePubHandler)
+	opts.OnConnect = connectHandler
+	opts.OnConnectionLost = connectLostHandler
+	//        mclient = mqtt.NewClient(opts)
+	//        if token := mclient.Connect(); token.Wait() && token.Error() != nil {
+	//                panic(token.Error())
+	//        }
 
-// Get commandline args
-        if len(os.Args) > 1 {
-                a1 := os.Args[1]
-                if a1 == "readPrices" {
+	// Get commandline args
+	if len(os.Args) > 1 {
+		a1 := os.Args[1]
+		if a1 == "readPrices" {
 			opts.SetClientID("tibber2mqttsingle")
-                        mclient = mqtt.NewClient(opts)
-                        if token := mclient.Connect(); token.Wait() && token.Error() != nil {
-                                panic(token.Error())
-                        }
-                        getTibberPrices()
-                        os.Exit(0)
-                }
-                if a1 == "subPower" {
-        		mclient = mqtt.NewClient(opts)
-        		if token := mclient.Connect(); token.Wait() && token.Error() != nil {
-                		panic(token.Error())
-        		}
+			mclient = mqtt.NewClient(opts)
+			if token := mclient.Connect(); token.Wait() && token.Error() != nil {
+				panic(token.Error())
+			}
+			getTibberPrices()
+			os.Exit(0)
+		}
+		if a1 == "subPower" {
+			// Catch signals
+			signals := make(chan os.Signal, 1)
+			signal.Notify(signals, syscall.SIGHUP, syscall.SIGTERM)
+			go catch_signals(signals)
+			mclient = mqtt.NewClient(opts)
+			if token := mclient.Connect(); token.Wait() && token.Error() != nil {
+				panic(token.Error())
+			}
 			getTibberSubUrl()
 			getTibberHomeId()
-                        subTibberPower()
-                        os.Exit(0)
-                }
-                if a1 == "getSubUrl" {
-                        getTibberSubUrl()
-                        os.Exit(0)
-                }
-               	if a1 == "getHomeId" {
-                        getTibberHomeId()
-                        os.Exit(0)
-                }
-                fmt.Println("parameter invalid")
-                os.Exit(-1)
-        }
-        if len(os.Args) == 1 {
-                myUsage()
-        }
+			subTibberPower()
+			os.Exit(0)
+		}
+		if a1 == "getSubUrl" {
+			getTibberSubUrl()
+			os.Exit(0)
+		}
+		if a1 == "getHomeId" {
+			getTibberHomeId()
+			os.Exit(0)
+		}
+		fmt.Println("parameter invalid")
+		log.Println("parameter invalid")
+		os.Exit(-1)
+	}
+	if len(os.Args) == 1 {
+		myUsage()
+	}
 }
 
 func read_config() {
-        err := viper.ReadInConfig() // Find and read the config file
-        if err != nil { // Handle errors reading the config file
-                log.Fatalf("Config file not found: %v", err)
-        }
+	err := viper.ReadInConfig() // Find and read the config file
+	if err != nil {             // Handle errors reading the config file
+		panic(fmt.Sprintf("Config file not found: %v", err))
+	}
 
-        ownlog = viper.GetString("own_log")
-        if ownlog =="" { // Handle errors reading the config file
-                log.Fatalf("Filename for ownlog unknown: %v", err)
-        }
-// Open log file
-        ownlogger = &lumberjack.Logger{
-                Filename:   ownlog,
-                MaxSize:    5, // megabytes
-                MaxBackups: 3,
-                MaxAge:     28, //days
-                Compress:   true, // disabled by default
-        }
-//        defer ownlogger.Close()
-        log.SetOutput(ownlogger)
+	ownlog = viper.GetString("own_log")
+	if ownlog == "" { // Handle errors reading the config file
+		panic(fmt.Sprintf("Filename for ownlog unknown: %v", err))
+	}
+	// Open log file
+	ownlogger = &lumberjack.Logger{
+		Filename:   ownlog,
+		MaxSize:    5, // megabytes
+		MaxBackups: 3,
+		MaxAge:     28,   //days
+		Compress:   true, // disabled by default
+	}
+	//        defer ownlogger.Close()
+	log.SetOutput(ownlogger)
 
-        tibberurl = viper.GetString("tibberurl")
-        tibbertoken = viper.GetString("tibbertoken")
-        mqttserver = viper.GetString("mqttserver")
-        mqttport = viper.GetString("mqttport")
+	tibberurl = viper.GetString("tibberurl")
+	tibbertoken = viper.GetString("tibbertoken")
+	mqttserver = viper.GetString("mqttserver")
+	mqttport = viper.GetString("mqttport")
 
-        if do_trace {
-                log.Println("do_trace: ",do_trace)
-                log.Println("own_log; ",ownlog)
-        }
+	if do_trace {
+		log.Println("do_trace: ", do_trace)
+		log.Println("own_log; ", ownlog)
+	}
 }
 
 var messagePubHandler mqtt.MessageHandler = func(client mqtt.Client, msg mqtt.Message) {
-    fmt.Printf("Received message: %s from topic: %s\n", msg.Payload(), msg.Topic())
+	log.Printf("Received message: %s from topic: %s\n", msg.Payload(), msg.Topic())
 }
 
 var connectHandler mqtt.OnConnectHandler = func(client mqtt.Client) {
-    fmt.Printf("Connected to MQTT server %s\n",mqttserver)
+	log.Printf("Connected to MQTT server %s\n", mqttserver)
 }
 
 var connectLostHandler mqtt.ConnectionLostHandler = func(client mqtt.Client, err error) {
-    fmt.Printf("Connect lost: %v", err)
+	log.Printf("Connect lost: %v", err)
 }
 
 func myUsage() {
-     fmt.Printf("Usage: %s argument\n", os.Args[0])
-     fmt.Println("Arguments:")
-     fmt.Println("readPrices	Read prices for today and tomorrow (only available after 1pm)")
-     fmt.Println("subPower	Subscribe to webservice to get current power consumption")
-     fmt.Println("getSubUrl	Get Url to use for subscriptions")
-     fmt.Println("getHomeId	Get ID of active home")
+	fmt.Printf("Usage: %s argument\n", os.Args[0])
+	fmt.Println("Arguments:")
+	fmt.Println("readPrices	Read prices for today and tomorrow (only available after 1pm)")
+	fmt.Println("subPower	Subscribe to webservice to get current power consumption")
+	fmt.Println("getSubUrl	Get Url to use for subscriptions")
+	fmt.Println("getHomeId	Get ID of active home")
 }
 
 func SortASC(a []float64) []float64 {
-        b := make([]float64, len(a))
-        copy(b, a)
+	b := make([]float64, len(a))
+	copy(b, a)
 	for i := 0; i < len(b)-1; i++ {
 		for j := i + 1; j < len(b); j++ {
 			if b[i] >= b[j] {
@@ -173,8 +181,8 @@ func SortASC(a []float64) []float64 {
 }
 
 func getTibberPrices() {
-        var tibberquery string = `{ "query": "{viewer {homes {currentSubscription {priceInfo {current {total startsAt} today {total startsAt} tomorrow {total startsAt}}}}}}"}`
-        var total string
+	var tibberquery string = `{ "query": "{viewer {homes {currentSubscription {priceInfo {current {total startsAt} today {total startsAt} tomorrow {total startsAt}}}}}}"}`
+	var total string
 	var ftotal float64 = 0
 	var ftomorrow float64 = 0
 	var topic string = "tibber2mqtt/out/"
@@ -189,169 +197,171 @@ func getTibberPrices() {
 
 	var prices []float64
 
-        token := mclient.Publish("tibber2mqtt/out/state", 0, false, "on")
-        token.Wait()
+	token := mclient.Publish("tibber2mqtt/out/state", 0, false, "on")
+	token.Wait()
 
-        // Create a Resty Client
-        client := resty.New()
+	// Create a Resty Client
+	client := resty.New()
 
-        // POST JSON string
-        // No need to set content type, if you have client level setting
-        resp, err := client.R().
-                SetHeader("Content-Type", "application/json").
-                SetBody(tibberquery).
-                SetAuthToken(tibbertoken).
-                Post(tibberurl)
-        if err == nil {
-                err = jscan.Scan(jscan.Options{
-                        CachePath:  true,
-                        EscapePath: true,
-                }, string(resp.Body()), func(i *jscan.Iterator) (err bool) {
-                        if i.Key() == "total" {
-                                total = i.Value();
-                        }
-                        if i.Key() == "startsAt" {
-                                temp = topic + "total" + i.Value()[11:13]
-                                if strings.Contains(i.Path(), "tomorrow"){
-                                        temp = topic + "tomorrow" + i.Value()[11:13]
-                                        val,_ := strconv.ParseFloat(total,64)
-                                        ftomorrow += val
-					ctomorrow++ 
-                                } else {
-					val,_ := strconv.ParseFloat(total,64)
+	// POST JSON string
+	// No need to set content type, if you have client level setting
+	resp, err := client.R().
+		SetHeader("Content-Type", "application/json").
+		SetBody(tibberquery).
+		SetAuthToken(tibbertoken).
+		Post(tibberurl)
+	if err == nil {
+		err = jscan.Scan(jscan.Options{
+			CachePath:  true,
+			EscapePath: true,
+		}, string(resp.Body()), func(i *jscan.Iterator) (err bool) {
+			if i.Key() == "total" {
+				total = i.Value()
+			}
+			if i.Key() == "startsAt" {
+				temp = topic + "total" + i.Value()[11:13]
+				if strings.Contains(i.Path(), "tomorrow") {
+					temp = topic + "tomorrow" + i.Value()[11:13]
+					val, _ := strconv.ParseFloat(total, 64)
+					ftomorrow += val
+					ctomorrow++
+				} else {
+					val, _ := strconv.ParseFloat(total, 64)
 					ftotal += val
-					ctotal++ 
+					ctotal++
 					if val < mintotal {
 						mintotal = val
 					}
-                                        if val > maxtotal {
-                                                maxtotal = val
-                                        }
-					prices = append(prices,val)
+					if val > maxtotal {
+						maxtotal = val
+					}
+					prices = append(prices, val)
 				}
-                                token = mclient.Publish(temp, 0, false, total)
-                                token.Wait()
-                        }
-                        return false // No Error, resume scanning
-                })
-                temp = topic + "totalmean"
-                token = mclient.Publish(temp, 0, false, fmt.Sprintf("%.4f",ftotal/float64(ctotal)))
-                token.Wait()
-                temp = topic + "tomorrowmean"
-                token = mclient.Publish(temp, 0, false, fmt.Sprintf("%.4f",ftomorrow/float64(ctomorrow)))
-                token.Wait()
+				token = mclient.Publish(temp, 0, false, total)
+				token.Wait()
+			}
+			return false // No Error, resume scanning
+		})
+		temp = topic + "totalmean"
+		token = mclient.Publish(temp, 0, false, fmt.Sprintf("%.4f", ftotal/float64(ctotal)))
+		token.Wait()
+		temp = topic + "tomorrowmean"
+		token = mclient.Publish(temp, 0, false, fmt.Sprintf("%.4f", ftomorrow/float64(ctomorrow)))
+		token.Wait()
 		diff = maxtotal - mintotal
 		diff = diff / 3
 		m1 = mintotal + diff
 		m2 = m1 + diff
-                mintotal += float64(0.01)
-                temp = topic + "mintotal"
+		mintotal += float64(0.01)
+		temp = topic + "mintotal"
 		if mintotal > float64(1) {
 			mintotal = float64(0.2)
 		}
-                if m1 > float64(1) {
-                        m1 = float64(0.2)
-                }
-                if m2 > float64(1) {
-                        m2 = float64(0.3)
-                }
-                token = mclient.Publish(temp, 0, false, fmt.Sprintf("%.4f",mintotal))
-                token.Wait()
-                temp = topic + "maxtotal"
-                token = mclient.Publish(temp, 0, false, fmt.Sprintf("%.4f",maxtotal))
-                token.Wait()
-                temp = topic + "m1"
-                token = mclient.Publish(temp, 0, false, fmt.Sprintf("%.4f",m1))
-                token.Wait()
-                temp = topic + "m2"
-                token = mclient.Publish(temp, 0, false, fmt.Sprintf("%.4f",m2))
-                token.Wait()
+		if m1 > float64(1) {
+			m1 = float64(0.2)
+		}
+		if m2 > float64(1) {
+			m2 = float64(0.3)
+		}
+		token = mclient.Publish(temp, 0, false, fmt.Sprintf("%.4f", mintotal))
+		token.Wait()
+		temp = topic + "maxtotal"
+		token = mclient.Publish(temp, 0, false, fmt.Sprintf("%.4f", maxtotal))
+		token.Wait()
+		temp = topic + "m1"
+		token = mclient.Publish(temp, 0, false, fmt.Sprintf("%.4f", m1))
+		token.Wait()
+		temp = topic + "m2"
+		token = mclient.Publish(temp, 0, false, fmt.Sprintf("%.4f", m2))
+		token.Wait()
 
 		pricest := SortASC(prices)
 		for i := 1; i < len(pricest); i++ {
-                	temp = topic + "t" + fmt.Sprintf("%d",i)
-                	token = mclient.Publish(temp, 0, false, fmt.Sprintf("%.4f",pricest[i-1]))
-                	token.Wait()
+			temp = topic + "t" + fmt.Sprintf("%d", i)
+			token = mclient.Publish(temp, 0, false, fmt.Sprintf("%.4f", pricest[i-1]))
+			token.Wait()
 		}
 
-                pricesn := SortASC(prices[0:6])
-                for i := 1; i < 7; i++ {
-                        temp = topic + "n" + fmt.Sprintf("%d",i)
-                        token = mclient.Publish(temp, 0, false, fmt.Sprintf("%.4f",pricesn[i-1]))
-                        token.Wait()
-                }
-        } else {
-                fmt.Println(err)
-        }
+		pricesn := SortASC(prices[0:6])
+		for i := 1; i < 7; i++ {
+			temp = topic + "n" + fmt.Sprintf("%d", i)
+			token = mclient.Publish(temp, 0, false, fmt.Sprintf("%.4f", pricesn[i-1]))
+			token.Wait()
+		}
+	} else {
+		fmt.Println(err)
+		log.Println(err)
+	}
 }
 
-func getTibberSubUrl(){
-        var tibberquery string = `{ "query": "{viewer {websocketSubscriptionUrl } }"}`
-        // Create a Resty Client
-        client := resty.New()
+func getTibberSubUrl() {
+	var tibberquery string = `{ "query": "{viewer {websocketSubscriptionUrl } }"}`
+	// Create a Resty Client
+	client := resty.New()
 
-        // POST JSON string
-        // No need to set content type, if you have client level setting
-        resp, err := client.R().
-                SetHeader("Content-Type", "application/json").
-                SetBody(tibberquery).
-                SetAuthToken(tibbertoken).
-                Post(tibberurl)
-        if err == nil {
-                err = jscan.Scan(jscan.Options{
-                        CachePath:  true,
-                        EscapePath: true,
-                }, string(resp.Body()), func(i *jscan.Iterator) (err bool) {
-                        if i.Key() == "websocketSubscriptionUrl" {
-                                tibberws = i.Value()
-				fmt.Println(tibberws)
-                        }
+	// POST JSON string
+	// No need to set content type, if you have client level setting
+	resp, err := client.R().
+		SetHeader("Content-Type", "application/json").
+		SetBody(tibberquery).
+		SetAuthToken(tibbertoken).
+		Post(tibberurl)
+	if err == nil {
+		err = jscan.Scan(jscan.Options{
+			CachePath:  true,
+			EscapePath: true,
+		}, string(resp.Body()), func(i *jscan.Iterator) (err bool) {
+			if i.Key() == "websocketSubscriptionUrl" {
+				tibberws = i.Value()
+				log.Println(tibberws)
+			}
 			return false
-                })
-        } else {
-                fmt.Println(err)
-        }
+		})
+	} else {
+		log.Println(err)
+	}
 }
 
-func getTibberHomeId(){
+func getTibberHomeId() {
 	var homeid string
-        var tibberquery string = `{ "query": "{viewer {homes {id features {realTimeConsumptionEnabled } } } }"}`
-        // Create a Resty Client
-        client := resty.New()
+	var tibberquery string = `{ "query": "{viewer {homes {id features {realTimeConsumptionEnabled } } } }"}`
+	// Create a Resty Client
+	client := resty.New()
 
-        // POST JSON string
-        // No need to set content type, if you have client level setting
-        resp, err := client.R().
-                SetHeader("Content-Type", "application/json").
-                SetBody(tibberquery).
-                SetAuthToken(tibbertoken).
-                Post(tibberurl)
-        if err == nil {
-                err = jscan.Scan(jscan.Options{
-                        CachePath:  true,
-                        EscapePath: true,
-                }, string(resp.Body()), func(i *jscan.Iterator) (err bool) {
-                        if i.Key() == "id" {
-                                homeid = i.Value()
-                        }
-                        if i.Key() == "realTimeConsumptionEnabled" {
+	// POST JSON string
+	// No need to set content type, if you have client level setting
+	resp, err := client.R().
+		SetHeader("Content-Type", "application/json").
+		SetBody(tibberquery).
+		SetAuthToken(tibbertoken).
+		Post(tibberurl)
+	if err == nil {
+		err = jscan.Scan(jscan.Options{
+			CachePath:  true,
+			EscapePath: true,
+		}, string(resp.Body()), func(i *jscan.Iterator) (err bool) {
+			if i.Key() == "id" {
+				homeid = i.Value()
+			}
+			if i.Key() == "realTimeConsumptionEnabled" {
 				if i.Value() == "true" {
-                                	tibberhomeid = homeid
-                                }
-                        }
-                        return false
-                })
-        } else {
-                fmt.Println(err)
-        }
-	fmt.Println(tibberhomeid)
+					tibberhomeid = homeid
+				}
+			}
+			return false
+		})
+	} else {
+		log.Println(err)
+	}
+	log.Println(tibberhomeid)
 }
 
 func subTibberPower() error {
 	// get the demo token from the graphiql playground
 	demoToken := tibbertoken
 	if demoToken == "" {
-                fmt.Println("Token is required")
+		fmt.Println("Token is required")
+		log.Println("Token is required")
 		panic("Token is required")
 	}
 
@@ -371,7 +381,8 @@ func subTibberPower() error {
 			"token": demoToken,
 		}).WithLog(log.Println).
 		OnError(func(sc *graphql.SubscriptionClient, err error) error {
-                        fmt.Println(err)
+			fmt.Println(err)
+			log.Println(err)
 			panic(err)
 		})
 
@@ -379,10 +390,10 @@ func subTibberPower() error {
 
 	var sub struct {
 		LiveMeasurement struct {
-			Power                  int       `graphql:"power"`
-                        PowerProduction        int       `graphql:"powerProduction"`
-			AccumulatedConsumption float64   `graphql:"accumulatedConsumption"`
-			AccumulatedCost        float64   `graphql:"accumulatedCost"`
+			Power                  int     `graphql:"power"`
+			PowerProduction        int     `graphql:"powerProduction"`
+			AccumulatedConsumption float64 `graphql:"accumulatedConsumption"`
+			AccumulatedCost        float64 `graphql:"accumulatedCost"`
 		} `graphql:"liveMeasurement(homeId: $homeId)"`
 	}
 
@@ -392,64 +403,65 @@ func subTibberPower() error {
 	_, err := client.Subscribe(sub, variables, func(data []byte, err error) error {
 
 		if err != nil {
-			fmt.Println("ERROR: ", err)
+			log.Println("ERROR: ", err)
 			return nil
 		}
 
 		if data == nil {
-                        fmt.Println("No data found")
+			log.Println("No data found")
 			return nil
 		}
 
-                fmt.Printf("%s :: %s\n",time.Now().Format(time.RFC850),string(data))
+		log.Printf("%s :: %s\n", time.Now().Format(time.RFC850), string(data))
 
-                var tLive map[string]interface{}
-                var power float64
-                var powerProd float64
-                var accCons float64
-                var accCost float64
+		var tLive map[string]interface{}
+		var power float64
+		var powerProd float64
+		var accCons float64
+		var accCost float64
 
-                err = json.Unmarshal([]byte(data), &tLive)
-	        if err != nil {
-		        fmt.Printf("could not unmarshal json: %s\n", err)
-		        return nil
-	        }
+		err = json.Unmarshal([]byte(data), &tLive)
+		if err != nil {
+			log.Printf("could not unmarshal json: %s\n", err)
+			return nil
+		}
 
-                measure := tLive["liveMeasurement"].(map[string]interface{})
+		measure := tLive["liveMeasurement"].(map[string]interface{})
 
-                for key, value := range measure {
-                        // Each value is an `any` type, that is type asserted as a string
-                        if key == "power" {
-                           power = value.(float64)
-                        }
-                        if key == "powerProduction" {
-                           powerProd = value.(float64)
-                        }
-                        if key == "accumulatedConsumption" {
-                           accCons = value.(float64)
-                        }
-                        if key == "accumulatedCost" {
-                           accCost = value.(float64)
-                        }
-                }
+		for key, value := range measure {
+			// Each value is an `any` type, that is type asserted as a string
+			if key == "power" {
+				power = value.(float64)
+			}
+			if key == "powerProduction" {
+				powerProd = value.(float64)
+			}
+			if key == "accumulatedConsumption" {
+				accCons = value.(float64)
+			}
+			if key == "accumulatedCost" {
+				accCost = value.(float64)
+			}
+		}
 
-                var powerGes float64 = power - powerProd
+		var powerGes float64 = power - powerProd
 
-                token := mclient.Publish("tibber2mqtt/out/", 0, false, fmt.Sprintf("%v",string(data)))
-                token.Wait() 
-                token = mclient.Publish("tibber2mqtt/out/powerGes", 0, false, fmt.Sprintf("%0.0f",powerGes))
-                token.Wait()
+		token := mclient.Publish("tibber2mqtt/out/", 0, false, fmt.Sprintf("%v", string(data)))
+		token.Wait()
+		token = mclient.Publish("tibber2mqtt/out/powerGes", 0, false, fmt.Sprintf("%0.0f", powerGes))
+		token.Wait()
 
-                var priceAvg float64 = accCost / accCons
+		var priceAvg float64 = accCost / accCons
 
-                token = mclient.Publish("tibber2mqtt/out/priceAvg", 0, false, fmt.Sprintf("%0.4f",priceAvg))
-                token.Wait()
+		token = mclient.Publish("tibber2mqtt/out/priceAvg", 0, false, fmt.Sprintf("%0.4f", priceAvg))
+		token.Wait()
 
 		return nil
 	})
 
 	if err != nil {
-                fmt.Println(err)
+		fmt.Println(err)
+		log.Println(err)
 		panic(err)
 	}
 
@@ -461,3 +473,16 @@ func (h headerRoundTripper) RoundTrip(req *http.Request) (*http.Response, error)
 	return h.rt.RoundTrip(req)
 }
 
+func catch_signals(c <-chan os.Signal) {
+	for {
+		s := <-c
+		log.Println("Got signal:", s)
+		if s == syscall.SIGHUP {
+			read_config()
+		}
+		if s == syscall.SIGTERM {
+			log.Println("tibber2mqtt stopped by SIGTERM")
+			os.Exit(0)
+		}
+	}
+}

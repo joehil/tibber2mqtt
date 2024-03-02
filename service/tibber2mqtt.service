@@ -1,0 +1,12 @@
+[Unit]
+Description=Send data optained from tibber.com to MQTT server
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/path to tibber2mqtt/tibber2mqtt subPower
+User=<user>
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
