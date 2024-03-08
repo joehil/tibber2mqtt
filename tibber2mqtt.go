@@ -24,6 +24,7 @@ import (
 var do_trace bool = true
 
 var ownlog string
+var jsonpath string
 var tibberurl string
 var tibbertoken string
 var tibberws string
@@ -38,7 +39,8 @@ var mclient mqtt.Client
 var opts = mqtt.NewClientOptions()
 
 var start_time time.Time
-var elapsed time.Duration
+
+//var elapsed time.Duration
 
 type headerRoundTripper struct {
 	setHeaders func(req *http.Request)
@@ -46,10 +48,6 @@ type headerRoundTripper struct {
 }
 
 func main() {
-	start_time = time.Now()
-	t := time.Now()
-	elapsed = t.Sub(start_time)
-
 	// Set location of config
 	viper.SetConfigName("tibber2mqtt") // name of config file (without extension)
 	viper.AddConfigPath("/etc/")       // path to look for the config file in
@@ -79,6 +77,15 @@ func main() {
 				panic(token.Error())
 			}
 			getTibberPrices()
+			os.Exit(0)
+		}
+		if a1 == "readPricesNew" {
+			opts.SetClientID("tibber2mqttsingle")
+			mclient = mqtt.NewClient(opts)
+			if token := mclient.Connect(); token.Wait() && token.Error() != nil {
+				panic(token.Error())
+			}
+			getTibberPricesNew()
 			os.Exit(0)
 		}
 		if a1 == "subPower" {
@@ -137,10 +144,12 @@ func read_config() {
 	tibbertoken = viper.GetString("tibbertoken")
 	mqttserver = viper.GetString("mqttserver")
 	mqttport = viper.GetString("mqttport")
+	jsonpath = viper.GetString("json_path")
 
 	if do_trace {
 		log.Println("do_trace: ", do_trace)
-		log.Println("own_log; ", ownlog)
+		log.Println("own_log: ", ownlog)
+		log.Println("json path: ", jsonpath)
 	}
 }
 
@@ -154,6 +163,7 @@ var connectHandler mqtt.OnConnectHandler = func(client mqtt.Client) {
 
 var connectLostHandler mqtt.ConnectionLostHandler = func(client mqtt.Client, err error) {
 	log.Printf("Connect lost: %v", err)
+	panic("Connection lost, tibber2mqtt abended")
 }
 
 func myUsage() {
@@ -291,6 +301,191 @@ func getTibberPrices() {
 	} else {
 		fmt.Println(err)
 		log.Println(err)
+	}
+}
+
+func getTibberPricesNew() {
+	var tibberquery string = `{ "query": "{viewer {homes {currentSubscription {priceInfo {current {total startsAt} today {total startsAt} tomorrow {total startsAt}}}}}}"}`
+	var json string
+	var total string
+	var ftotal float64 = 0
+	var ftomorrow float64 = 0
+	var topic string = "tibber2mqtt/out/"
+	var ctotal int8 = 0
+	var ctomorrow int8 = 0
+	var mintotal float64 = 99
+	var maxtotal float64 = 0
+	var diff float64 = 0
+	var m1 float64 = 0
+	var m2 float64 = 0
+
+	var prices []float64
+	var today [30]float64
+	var tomorrow [24]float64
+	var n []float64
+	var t [24]float64
+
+	var bT bool = false
+	var bN bool = false
+
+	start := time.Now()
+
+	hour := start.Hour()
+
+	jpathT := fmt.Sprintf("%s/tibberT.json", jsonpath)
+	jpathN := fmt.Sprintf("%s/tibberN.json", jsonpath)
+
+	token := mclient.Publish(topic+"state", 0, false, "on")
+	token.Wait()
+
+	if fileExists(jpathT) {
+		json, err := os.ReadFile(jpathT)
+		if err == nil {
+			token := mclient.Publish(topic, 0, false, string(json))
+			token.Wait()
+			bT = true
+		}
+		if hour > 22 || hour == 13 {
+			os.Remove(jpathT)
+			bT = false
+		}
+	}
+
+	if fileExists(jpathN) {
+		json, err := os.ReadFile(jpathN)
+		if err == nil {
+			token := mclient.Publish(topic, 0, false, string(json))
+			token.Wait()
+			bN = true
+		}
+		if hour > 6 && hour < 14 {
+			os.Remove(jpathN)
+			bN = false
+		}
+	}
+
+	if !bT || !bN {
+		// Create a Resty Client
+		client := resty.New()
+
+		// POST JSON string
+		// No need to set content type, if you have client level setting
+		resp, err := client.R().
+			SetHeader("Content-Type", "application/json").
+			SetBody(tibberquery).
+			SetAuthToken(tibbertoken).
+			Post(tibberurl)
+		if err == nil {
+			err = jscan.Scan(jscan.Options{
+				CachePath:  true,
+				EscapePath: true,
+			}, string(resp.Body()), func(i *jscan.Iterator) (err bool) {
+				if i.Key() == "total" {
+					total = i.Value()
+				}
+				if i.Key() == "startsAt" {
+					if strings.Contains(i.Path(), "tomorrow") {
+						ind, _ := strconv.Atoi(i.Value()[11:13])
+						val, _ := strconv.ParseFloat(total, 64)
+						tomorrow[ind] = val
+						ftomorrow += val
+						ctomorrow++
+					} else {
+						ind, _ := strconv.Atoi(i.Value()[11:13])
+						val, _ := strconv.ParseFloat(total, 64)
+						today[ind] = val
+						ftotal += val
+						ctotal++
+						if val < mintotal {
+							mintotal = val
+						}
+						if val > maxtotal {
+							maxtotal = val
+						}
+						prices = append(prices, val)
+					}
+				}
+				return false // No Error, resume scanning
+			})
+
+			if !bT {
+				diff = maxtotal - mintotal
+				diff = diff / 3
+				m1 = mintotal + diff
+				m2 = m1 + diff
+
+				if mintotal > float64(1) {
+					mintotal = float64(0.2)
+				}
+				if m1 > float64(1) {
+					m1 = float64(0.2)
+				}
+				if m2 > float64(1) {
+					m2 = float64(0.3)
+				}
+
+				pricest := SortASC(prices)
+				for i := 1; i < 24; i++ {
+					t[i] = pricest[i]
+				}
+
+				json = "{"
+				for i := 0; i <= 23; i++ {
+					json += fmt.Sprintf("\"total%02d\":%0.4f,", i, today[i])
+				}
+				if tomorrow[10] != float64(0) {
+					for i := 0; i <= 23; i++ {
+						json += fmt.Sprintf("\"tomorrow%02d\":%0.4f,", i, tomorrow[i])
+					}
+				}
+				for i := 1; i <= 23; i++ {
+					json += fmt.Sprintf("\"t%d\":%0.4f,", i, t[i])
+				}
+				json += fmt.Sprintf("\"mintotal\":%0.4f,", mintotal)
+				json += fmt.Sprintf("\"maxtotal\":%0.4f,", maxtotal)
+				json += fmt.Sprintf("\"m1\":%0.4f,", m1)
+				json += fmt.Sprintf("\"m2\":%0.4f}", m2)
+
+				//			fmt.Println(json)
+
+				token := mclient.Publish(topic, 0, false, string(json))
+				token.Wait()
+
+				err := os.WriteFile(jpathT, []byte(json), 0666)
+				if err != nil {
+					log.Fatal(err)
+				}
+			}
+
+			if tomorrow[10] != float64(0) && !bN {
+				n = append(n, today[21])
+				n = append(n, today[22])
+				n = append(n, today[23])
+				for i := 0; i <= 5; i++ {
+					n = append(n, tomorrow[i])
+				}
+				n = SortASC(n)
+
+				json = "{"
+				for i := 0; i < 8; i++ {
+					json += fmt.Sprintf("\"n%d\":%0.4f,", i+1, n[i])
+				}
+				json += fmt.Sprintf("\"n%d\":%0.4f}", 9, n[8])
+
+				//			fmt.Println(json)
+
+				token := mclient.Publish(topic, 0, false, string(json))
+				token.Wait()
+
+				err := os.WriteFile(jpathN, []byte(json), 0666)
+				if err != nil {
+					log.Fatal(err)
+				}
+			}
+		} else {
+			fmt.Println(err)
+			log.Println(err)
+		}
 	}
 }
 
@@ -485,4 +680,12 @@ func catch_signals(c <-chan os.Signal) {
 			os.Exit(0)
 		}
 	}
+}
+
+func fileExists(filename string) bool {
+	info, err := os.Stat(filename)
+	if os.IsNotExist(err) {
+		return false
+	}
+	return !info.IsDir()
 }
