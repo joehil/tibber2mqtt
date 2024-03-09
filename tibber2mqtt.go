@@ -347,7 +347,6 @@ func getTibberPricesNew() {
 		}
 		if hour > 22 || hour == 13 {
 			os.Remove(jpathT)
-			bT = false
 		}
 	}
 
@@ -360,7 +359,6 @@ func getTibberPricesNew() {
 		}
 		if hour > 6 && hour < 14 {
 			os.Remove(jpathN)
-			bN = false
 		}
 	}
 
