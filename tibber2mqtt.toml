@@ -5,6 +5,9 @@ do_trace = false
 # file that you write your log to
 own_log = "/tmp/tibber2mptt.log"
 
+# path of json files
+json_path = "/tmp"
+
 # login data of your tibber server
 tibberurl = "https://api.tibber.com/v1-beta/gql"
 tibbertoken = "<tibber api token>"
