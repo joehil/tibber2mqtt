@@ -320,7 +320,7 @@ func getTibberPricesNew() {
 	var m2 float64 = 0
 
 	var prices []float64
-	var today [30]float64
+	var today [24]float64
 	var tomorrow [24]float64
 	var n []float64
 	var t [24]float64
@@ -388,7 +388,8 @@ func getTibberPricesNew() {
 						tomorrow[ind] = val
 						ftomorrow += val
 						ctomorrow++
-					} else {
+					}
+					if strings.Contains(i.Path(), "today") {
 						ind, _ := strconv.Atoi(i.Value()[11:13])
 						val, _ := strconv.ParseFloat(total, 64)
 						today[ind] = val
@@ -424,7 +425,7 @@ func getTibberPricesNew() {
 
 				pricest := SortASC(prices)
 				for i := 1; i < 24; i++ {
-					t[i] = pricest[i]
+					t[i] = pricest[i-1]
 				}
 
 				json = "{"
