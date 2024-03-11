@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -22,6 +23,7 @@ import (
 )
 
 var do_trace bool = true
+var bPanic bool = false
 
 var ownlog string
 var jsonpath string
@@ -37,8 +39,6 @@ var mqttport string
 
 var mclient mqtt.Client
 var opts = mqtt.NewClientOptions()
-
-var start_time time.Time
 
 //var elapsed time.Duration
 
@@ -85,7 +85,11 @@ func main() {
 			if token := mclient.Connect(); token.Wait() && token.Error() != nil {
 				panic(token.Error())
 			}
-			getTibberPricesNew()
+			//			getTibberPricesNew()
+			safeRun(getTibberPricesNew)
+			if bPanic {
+				panic("Program abend")
+			}
 			os.Exit(0)
 		}
 		if a1 == "subPower" {
@@ -687,4 +691,30 @@ func fileExists(filename string) bool {
 		return false
 	}
 	return !info.IsDir()
+}
+
+func printStackTrace() {
+	buffer := make([]byte, 1024)
+	for {
+		n := runtime.Stack(buffer, false)
+		if n < len(buffer) {
+			buffer = buffer[:n]
+			break
+		}
+		buffer = make([]byte, len(buffer)*2)
+	}
+	fmt.Printf("Stack trace:\n%s\n", buffer)
+}
+
+func safeRun(f func()) {
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Println("Recovered from panic:", r)
+			printStackTrace()
+			fmt.Println("Wait for a minute")
+			time.Sleep(time.Minute)
+			bPanic = true
+		}
+	}()
+	f()
 }
