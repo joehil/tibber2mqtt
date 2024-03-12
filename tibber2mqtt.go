@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -23,7 +22,8 @@ import (
 )
 
 var do_trace bool = true
-var bPanic bool = false
+
+var counter uint64 = 0
 
 var ownlog string
 var jsonpath string
@@ -85,11 +85,7 @@ func main() {
 			if token := mclient.Connect(); token.Wait() && token.Error() != nil {
 				panic(token.Error())
 			}
-			//			getTibberPricesNew()
-			safeRun(getTibberPricesNew)
-			if bPanic {
-				panic("Program abend")
-			}
+			getTibberPricesNew()
 			os.Exit(0)
 		}
 		if a1 == "subPower" {
@@ -101,6 +97,7 @@ func main() {
 			if token := mclient.Connect(); token.Wait() && token.Error() != nil {
 				panic(token.Error())
 			}
+			go watchDog()
 			getTibberSubUrl()
 			getTibberHomeId()
 			subTibberPower()
@@ -654,6 +651,8 @@ func subTibberPower() error {
 		token = mclient.Publish("tibber2mqtt/out/priceAvg", 0, false, fmt.Sprintf("%0.4f", priceAvg))
 		token.Wait()
 
+		counter++
+
 		return nil
 	})
 
@@ -693,28 +692,14 @@ func fileExists(filename string) bool {
 	return !info.IsDir()
 }
 
-func printStackTrace() {
-	buffer := make([]byte, 1024)
+func watchDog() {
+	var old uint64 = counter
 	for {
-		n := runtime.Stack(buffer, false)
-		if n < len(buffer) {
-			buffer = buffer[:n]
-			break
+		time.Sleep(3 * time.Minute)
+		log.Printf("Watchdog counter: %d\n", counter)
+		if counter == old {
+			panic("Program seems to be frozen")
 		}
-		buffer = make([]byte, len(buffer)*2)
+		old = counter
 	}
-	fmt.Printf("Stack trace:\n%s\n", buffer)
-}
-
-func safeRun(f func()) {
-	defer func() {
-		if r := recover(); r != nil {
-			fmt.Println("Recovered from panic:", r)
-			printStackTrace()
-			fmt.Println("Wait for a minute")
-			time.Sleep(time.Minute)
-			bPanic = true
-		}
-	}()
-	f()
 }
