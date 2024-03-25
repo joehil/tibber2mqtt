@@ -79,16 +79,8 @@ func main() {
 			getTibberPrices()
 			os.Exit(0)
 		}
-		if a1 == "readPricesNew" {
-			opts.SetClientID("tibber2mqttsingle")
-			mclient = mqtt.NewClient(opts)
-			if token := mclient.Connect(); token.Wait() && token.Error() != nil {
-				panic(token.Error())
-			}
-			getTibberPricesNew()
-			os.Exit(0)
-		}
 		if a1 == "subPower" {
+			go watchDog()
 			// Catch signals
 			signals := make(chan os.Signal, 1)
 			signal.Notify(signals, syscall.SIGHUP, syscall.SIGTERM)
@@ -97,7 +89,6 @@ func main() {
 			if token := mclient.Connect(); token.Wait() && token.Error() != nil {
 				panic(token.Error())
 			}
-			go watchDog()
 			getTibberSubUrl()
 			getTibberHomeId()
 			subTibberPower()
@@ -192,121 +183,7 @@ func SortASC(a []float64) []float64 {
 }
 
 func getTibberPrices() {
-	var tibberquery string = `{ "query": "{viewer {homes {currentSubscription {priceInfo {current {total startsAt} today {total startsAt} tomorrow {total startsAt}}}}}}"}`
-	var total string
-	var ftotal float64 = 0
-	var ftomorrow float64 = 0
-	var topic string = "tibber2mqtt/out/"
-	var temp string
-	var ctotal int8 = 0
-	var ctomorrow int8 = 0
-	var mintotal float64 = 99
-	var maxtotal float64 = 0
-	var diff float64 = 0
-	var m1 float64 = 0
-	var m2 float64 = 0
-
-	var prices []float64
-
-	token := mclient.Publish("tibber2mqtt/out/state", 0, false, "on")
-	token.Wait()
-
-	// Create a Resty Client
-	client := resty.New()
-
-	// POST JSON string
-	// No need to set content type, if you have client level setting
-	resp, err := client.R().
-		SetHeader("Content-Type", "application/json").
-		SetBody(tibberquery).
-		SetAuthToken(tibbertoken).
-		Post(tibberurl)
-	if err == nil {
-		err = jscan.Scan(jscan.Options{
-			CachePath:  true,
-			EscapePath: true,
-		}, string(resp.Body()), func(i *jscan.Iterator) (err bool) {
-			if i.Key() == "total" {
-				total = i.Value()
-			}
-			if i.Key() == "startsAt" {
-				temp = topic + "total" + i.Value()[11:13]
-				if strings.Contains(i.Path(), "tomorrow") {
-					temp = topic + "tomorrow" + i.Value()[11:13]
-					val, _ := strconv.ParseFloat(total, 64)
-					ftomorrow += val
-					ctomorrow++
-				} else {
-					val, _ := strconv.ParseFloat(total, 64)
-					ftotal += val
-					ctotal++
-					if val < mintotal {
-						mintotal = val
-					}
-					if val > maxtotal {
-						maxtotal = val
-					}
-					prices = append(prices, val)
-				}
-				token = mclient.Publish(temp, 0, false, total)
-				token.Wait()
-			}
-			return false // No Error, resume scanning
-		})
-		temp = topic + "totalmean"
-		token = mclient.Publish(temp, 0, false, fmt.Sprintf("%.4f", ftotal/float64(ctotal)))
-		token.Wait()
-		temp = topic + "tomorrowmean"
-		token = mclient.Publish(temp, 0, false, fmt.Sprintf("%.4f", ftomorrow/float64(ctomorrow)))
-		token.Wait()
-		diff = maxtotal - mintotal
-		diff = diff / 3
-		m1 = mintotal + diff
-		m2 = m1 + diff
-		mintotal += float64(0.01)
-		temp = topic + "mintotal"
-		if mintotal > float64(1) {
-			mintotal = float64(0.2)
-		}
-		if m1 > float64(1) {
-			m1 = float64(0.2)
-		}
-		if m2 > float64(1) {
-			m2 = float64(0.3)
-		}
-		token = mclient.Publish(temp, 0, false, fmt.Sprintf("%.4f", mintotal))
-		token.Wait()
-		temp = topic + "maxtotal"
-		token = mclient.Publish(temp, 0, false, fmt.Sprintf("%.4f", maxtotal))
-		token.Wait()
-		temp = topic + "m1"
-		token = mclient.Publish(temp, 0, false, fmt.Sprintf("%.4f", m1))
-		token.Wait()
-		temp = topic + "m2"
-		token = mclient.Publish(temp, 0, false, fmt.Sprintf("%.4f", m2))
-		token.Wait()
-
-		pricest := SortASC(prices)
-		for i := 1; i < len(pricest); i++ {
-			temp = topic + "t" + fmt.Sprintf("%d", i)
-			token = mclient.Publish(temp, 0, false, fmt.Sprintf("%.4f", pricest[i-1]))
-			token.Wait()
-		}
-
-		pricesn := SortASC(prices[0:6])
-		for i := 1; i < 7; i++ {
-			temp = topic + "n" + fmt.Sprintf("%d", i)
-			token = mclient.Publish(temp, 0, false, fmt.Sprintf("%.4f", pricesn[i-1]))
-			token.Wait()
-		}
-	} else {
-		fmt.Println(err)
-		log.Println(err)
-	}
-}
-
-func getTibberPricesNew() {
-	var tibberquery string = `{ "query": "{viewer {homes {currentSubscription {priceInfo {current {total startsAt} today {total startsAt} tomorrow {total startsAt}}}}}}"}`
+	var tibberquery string = `{ "query": "{viewer {homes {currentSubscription {priceInfo {current {total startsAt} today {total startsAt} tomorrow {total startsAt} range (resolution: DAILY, last:7) {nodes {total}}}}}}}"}`
 	var json string
 	var total string
 	var ftotal float64 = 0
@@ -319,6 +196,7 @@ func getTibberPricesNew() {
 	var diff float64 = 0
 	var m1 float64 = 0
 	var m2 float64 = 0
+	var avg7 float64 = 0
 
 	var prices []float64
 	var today [24]float64
@@ -381,6 +259,10 @@ func getTibberPricesNew() {
 			}, string(resp.Body()), func(i *jscan.Iterator) (err bool) {
 				if i.Key() == "total" {
 					total = i.Value()
+					if strings.Contains(i.Path(), "range") {
+						val, _ := strconv.ParseFloat(total, 64)
+						avg7 += val
+					}
 				}
 				if i.Key() == "startsAt" {
 					if strings.Contains(i.Path(), "tomorrow") {
@@ -414,6 +296,8 @@ func getTibberPricesNew() {
 				m1 = mintotal + diff
 				m2 = m1 + diff
 
+				avg7 /= 7
+
 				if mintotal > float64(1) {
 					mintotal = float64(0.2)
 				}
@@ -444,9 +328,10 @@ func getTibberPricesNew() {
 				json += fmt.Sprintf("\"mintotal\":%0.4f,", mintotal)
 				json += fmt.Sprintf("\"maxtotal\":%0.4f,", maxtotal)
 				json += fmt.Sprintf("\"m1\":%0.4f,", m1)
-				json += fmt.Sprintf("\"m2\":%0.4f}", m2)
+				json += fmt.Sprintf("\"m2\":%0.4f,", m2)
+				json += fmt.Sprintf("\"avg7\":%0.4f}", avg7)
 
-				//			fmt.Println(json)
+				//				fmt.Println(json)
 
 				token := mclient.Publish(topic, 0, false, string(json))
 				token.Wait()
