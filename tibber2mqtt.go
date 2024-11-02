@@ -102,6 +102,23 @@ func main() {
 			getTibberHomeId()
 			os.Exit(0)
 		}
+		if a1 == "reinit" {
+			start := time.Now()
+			hour := start.Hour()
+			jpathT := fmt.Sprintf("%s/tibberT.json", jsonpath)
+			jpathN := fmt.Sprintf("%s/tibberN.json", jsonpath)
+			if hour > 6 {
+				os.Remove(jpathN)
+			}
+			os.Remove(jpathT)
+			opts.SetClientID("tibber2mqttreinit")
+			mclient = mqtt.NewClient(opts)
+			if token := mclient.Connect(); token.Wait() && token.Error() != nil {
+				panic(token.Error())
+			}
+			getTibberPrices()
+			os.Exit(0)
+		}
 		fmt.Println("parameter invalid")
 		log.Println("parameter invalid")
 		os.Exit(-1)
@@ -165,6 +182,7 @@ func myUsage() {
 	fmt.Println("subPower	Subscribe to webservice to get current power consumption")
 	fmt.Println("getSubUrl	Get Url to use for subscriptions")
 	fmt.Println("getHomeId	Get ID of active home")
+	fmt.Println("reinit		Get prices after unexpected end")
 }
 
 func SortASC(a []float64) []float64 {
