@@ -102,6 +102,15 @@ func main() {
 			getTibberHomeId()
 			os.Exit(0)
 		}
+                if a1 == "getCurPrice" {
+                        opts.SetClientID("tibber2mqttprice")
+                        mclient = mqtt.NewClient(opts)
+                        if token := mclient.Connect(); token.Wait() && token.Error() != nil {
+                                panic(token.Error())
+                        }
+                        getTibberCurrentPrice()
+                        os.Exit(0)
+                }
 		if a1 == "reinit" {
 			start := time.Now()
 			hour := start.Hour()
@@ -452,6 +461,38 @@ func getTibberHomeId() {
 		log.Println(err)
 	}
 	log.Println(tibberhomeid)
+}
+
+func getTibberCurrentPrice() {
+        var price string
+        var tibberquery string = `{ "query": "{viewer {homes {currentSubscription {priceInfo(resolution: QUARTER_HOURLY) {current {total startsAt} } } } } }"}`
+	time.Sleep(time.Second * 5)
+        // Create a Resty Client
+        client := resty.New()
+
+        // POST JSON string
+        // No need to set content type, if you have client level setting
+        resp, err := client.R().
+                SetHeader("Content-Type", "application/json").
+                SetBody(tibberquery).
+                SetAuthToken(tibbertoken).
+                Post(tibberurl)
+        if err == nil {
+                err = jscan.Scan(jscan.Options{
+                        CachePath:  true,
+                        EscapePath: true,
+                }, string(resp.Body()), func(i *jscan.Iterator) (err bool) {
+                        if i.Key() == "total" {
+                                price = i.Value()
+                        }
+                        return false
+                })
+        } else {
+                log.Println(err)
+        }
+        log.Println("Current Price:", price)
+	token := mclient.Publish("tibber2mqtt/out/curPrice", 0, false, price)
+        token.Wait()
 }
 
 func subTibberPower() error {
