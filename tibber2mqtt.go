@@ -223,7 +223,7 @@ func getTibberPrices() {
 	var total string
 	var ftotal float64 = 0
 	var ftomorrow float64 = 0
-	var topic string = "tibber2mqtt/out/"
+	var topic string = "tibber2mqtt/prices/"
 	var ctotal int8 = 0
 	var ctomorrow int8 = 0
 	var mintotal float64 = 99
@@ -234,7 +234,7 @@ func getTibberPrices() {
 	var avg7 float64 = 0
 
 	var prices []float64
-	var today [24]float64
+//	var today [24]float64
 	var tomorrow [24]float64
 	var n []float64
 	var t [24]float64
@@ -245,6 +245,8 @@ func getTibberPrices() {
 	start := time.Now()
 
 	hour := start.Hour()
+
+	today := make(map[string]float64)
 
 	jpathT := fmt.Sprintf("%s/tibberT.json", jsonpath)
 	jpathN := fmt.Sprintf("%s/tibberN.json", jsonpath)
@@ -312,8 +314,10 @@ func getTibberPrices() {
 					}
 					if strings.Contains(i.Path(), "today") {
 						ind, _ := strconv.Atoi(i.Value()[11:13])
+						subind, _ := strconv.Atoi(i.Value()[14:15])
 						val, _ := strconv.ParseFloat(total, 64)
-						today[ind] = val
+						tstr := fmt.Sprintf("%03d", ind*10+subind)
+						today[tstr] = val
 						ftotal += val
 						ctotal++
 						if val < mintotal {
@@ -328,7 +332,7 @@ func getTibberPrices() {
 				return false // No Error, resume scanning
 			})
 
-//                      fmt.Println(prices)
+//			fmt.Println(today)
 
 			if !bT {
 				diff = maxtotal - mintotal
@@ -354,8 +358,8 @@ func getTibberPrices() {
 				}
 
 				json = "{"
-				for i := 0; i <= 23; i++ {
-					json += fmt.Sprintf("\"total%02d\":%0.4f,", i, today[i])
+				for key, value := range today {
+                                        json += fmt.Sprintf("\"total%s\":%0.4f,", key, value)
 				}
 				if tomorrow[10] != float64(0) {
 					for i := 0; i <= 23; i++ {
@@ -383,19 +387,19 @@ func getTibberPrices() {
 			}
 
 			if tomorrow[10] != float64(0) && !bN {
-				n = append(n, today[21])
-				n = append(n, today[22])
-				n = append(n, today[23])
+//				n = append(n, today[21])
+//				n = append(n, today[22])
+//				n = append(n, today[23])
 				for i := 0; i <= 5; i++ {
 					n = append(n, tomorrow[i])
 				}
 				n = SortASC(n)
 
 				json = "{"
-				for i := 0; i < 8; i++ {
+				for i := 0; i < 6; i++ {
 					json += fmt.Sprintf("\"n%d\":%0.4f,", i+1, n[i])
 				}
-				json += fmt.Sprintf("\"n%d\":%0.4f}", 9, n[8])
+				json += fmt.Sprintf("\"n%d\":%0.4f}", 6, n[5])
 
 				//			fmt.Println(json)
 
