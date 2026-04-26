@@ -90,9 +90,11 @@ func main() {
 				panic(token.Error())
 			}
 			getTibberSubUrl()
-			getTibberHomeId()
-			subTibberPower()
-			os.Exit(0)
+			if getTibberHomeId() == 0 {
+				subTibberPower()
+				os.Exit(0)
+			}
+			os.Exit(-99)
 		}
 		if a1 == "getSubUrl" {
 			getTibberSubUrl()
@@ -163,6 +165,8 @@ func read_config() {
 
 	tibberurl = viper.GetString("tibberurl")
 	tibbertoken = viper.GetString("tibbertoken")
+//        tibberhomeid = viper.GetString("tibberhomeid")
+
 	mqttserver = viper.GetString("mqttserver")
 	mqttport = viper.GetString("mqttport")
 	jsonpath = viper.GetString("json_path")
@@ -171,6 +175,7 @@ func read_config() {
 		log.Println("do_trace: ", do_trace)
 		log.Println("own_log: ", ownlog)
 		log.Println("json path: ", jsonpath)
+//		log.Println("tibberhomeid: ", tibberhomeid)
 	}
 }
 
@@ -213,7 +218,7 @@ func SortASC(a []float64) []float64 {
 }
 
 func getTibberPrices() {
-	var tibberquery string = `{ "query": "{viewer {homes {currentSubscription {priceInfo {current {total startsAt} today {total startsAt} tomorrow {total startsAt} range (resolution: DAILY, last:7) {nodes {total}}}}}}}"}`
+	var tibberquery string = `{ "query": "{viewer {homes {currentSubscription {priceInfo(resolution: QUARTER_HOURLY){current {total startsAt} today {total startsAt} tomorrow {total startsAt} range (resolution: DAILY, last:7) {nodes {total}}}}}}}"}`
 	var json string
 	var total string
 	var ftotal float64 = 0
@@ -282,6 +287,9 @@ func getTibberPrices() {
 			SetBody(tibberquery).
 			SetAuthToken(tibbertoken).
 			Post(tibberurl)
+
+//              fmt.Println(resp)
+
 		if err == nil {
 			err = jscan.Scan(jscan.Options{
 				CachePath:  true,
@@ -320,6 +328,8 @@ func getTibberPrices() {
 				return false // No Error, resume scanning
 			})
 
+//                      fmt.Println(prices)
+
 			if !bT {
 				diff = maxtotal - mintotal
 				diff = diff / 3
@@ -339,8 +349,8 @@ func getTibberPrices() {
 				}
 
 				pricest := SortASC(prices)
-				for i := 1; i < 24; i++ {
-					t[i] = pricest[i-1]
+				for i := 0; i < 23; i++ {
+					t[i] = pricest[i*4]
 				}
 
 				json = "{"
@@ -361,7 +371,7 @@ func getTibberPrices() {
 				json += fmt.Sprintf("\"m2\":%0.4f,", m2)
 				json += fmt.Sprintf("\"avg7\":%0.4f}", avg7)
 
-				//				fmt.Println(json)
+//				fmt.Println(json)
 
 				token := mclient.Publish(topic, 0, false, string(json))
 				token.Wait()
@@ -432,11 +442,16 @@ func getTibberSubUrl() {
 	}
 }
 
-func getTibberHomeId() {
-	var homeid string
+func getTibberHomeId() int {
+	var homeid string 
+	var power string = "0.001"
 	var tibberquery string = `{ "query": "{viewer {homes {id features {realTimeConsumptionEnabled } } } }"}`
 	// Create a Resty Client
 	client := resty.New()
+
+	if (time.Now().Minute() % 10) > 4 {
+		power = "-0.001"
+	}
 
 	// POST JSON string
 	// No need to set content type, if you have client level setting
@@ -445,6 +460,8 @@ func getTibberHomeId() {
 		SetBody(tibberquery).
 		SetAuthToken(tibbertoken).
 		Post(tibberurl)
+log.Println(string(resp.Body()))
+log.Println(tibberhomeid)
 	if err == nil {
 		err = jscan.Scan(jscan.Options{
 			CachePath:  true,
@@ -461,9 +478,20 @@ func getTibberHomeId() {
 			return false
 		})
 	} else {
+		log.Print("Error: ")
 		log.Println(err)
+                token := mclient.Publish("tibber2mqtt/out/powerGes", 0, false, power)
+                token.Wait()
+		return -1
 	}
+	if tibberhomeid == "" {
+                token := mclient.Publish("tibber2mqtt/out/powerGes", 0, false, power)
+                token.Wait()
+                return -1
+	}
+	log.Print("HomeId: ")
 	log.Println(tibberhomeid)
+	return 0
 }
 
 func getTibberCurrentPrice() bool {
@@ -494,7 +522,7 @@ func getTibberCurrentPrice() bool {
 		log.Println(err)
 	}
 	log.Println("Current Price:", price)
-	if price > "0" {
+	if price != "0" {
 		token := mclient.Publish("tibber2mqtt/out/curPrice", 0, false, price)
 		token.Wait()
 		return true
