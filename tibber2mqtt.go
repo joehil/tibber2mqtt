@@ -21,6 +21,19 @@ import (
 	"github.com/spf13/viper"
 )
 
+type Command struct {
+	name        string
+	description string
+}
+
+var commands = []Command{
+	{"readPrices", "Read prices for today and tomorrow (only available after 1pm)"},
+	{"subPower", "Subscribe to webservice to get current power consumption"},
+	{"getSubUrl", "Get URL to use for subscriptions"},
+	{"getHomeId", "Get ID of active home"},
+	{"reinit", "Get prices after unexpected end"},
+}
+
 var do_trace bool = true
 
 var counter uint64 = 0
@@ -193,13 +206,11 @@ var connectLostHandler mqtt.ConnectionLostHandler = func(client mqtt.Client, err
 }
 
 func myUsage() {
-	fmt.Printf("Usage: %s argument\n", os.Args[0])
-	fmt.Println("Arguments:")
-	fmt.Println("readPrices	Read prices for today and tomorrow (only available after 1pm)")
-	fmt.Println("subPower	Subscribe to webservice to get current power consumption")
-	fmt.Println("getSubUrl	Get Url to use for subscriptions")
-	fmt.Println("getHomeId	Get ID of active home")
-	fmt.Println("reinit		Get prices after unexpected end")
+	fmt.Printf("Usage: %s <command>\n\n", os.Args[0])
+	fmt.Println("Available commands:")
+	for _, cmd := range commands {
+		fmt.Printf("  %-12s %s\n", cmd.name, cmd.description)
+	}
 }
 
 func SortASC(a []float64) []float64 {
@@ -235,7 +246,7 @@ func getTibberPrices() {
 
 	var prices []float64
 //	var today [24]float64
-	var tomorrow [24]float64
+//	var tomorrow [24]float64
 	var n []float64
 	var t [24]float64
 
@@ -247,6 +258,7 @@ func getTibberPrices() {
 	hour := start.Hour()
 
 	today := make(map[string]float64)
+	tomorrow := make(map[string]float64)
 
 	jpathT := fmt.Sprintf("%s/tibberT.json", jsonpath)
 	jpathN := fmt.Sprintf("%s/tibberN.json", jsonpath)
@@ -307,8 +319,10 @@ func getTibberPrices() {
 				if i.Key() == "startsAt" {
 					if strings.Contains(i.Path(), "tomorrow") {
 						ind, _ := strconv.Atoi(i.Value()[11:13])
+						subind, _ := strconv.Atoi(i.Value()[14:15])
 						val, _ := strconv.ParseFloat(total, 64)
-						tomorrow[ind] = val
+						tstr := fmt.Sprintf("%03d", ind*10+subind)
+						tomorrow[tstr] = val
 						ftomorrow += val
 						ctomorrow++
 					}
@@ -359,13 +373,13 @@ func getTibberPrices() {
 
 				json = "{"
 				for key, value := range today {
-                                        json += fmt.Sprintf("\"total%s\":%0.4f,", key, value)
+                    json += fmt.Sprintf("\"total%s\":%0.4f,", key, value)
 				}
-				if tomorrow[10] != float64(0) {
-					for i := 0; i <= 23; i++ {
-						json += fmt.Sprintf("\"tomorrow%02d\":%0.4f,", i, tomorrow[i])
+                for key, value := range tomorrow {
+					if key[0:1] < "1" {
+                       json += fmt.Sprintf("\"tomorrow%s\":%0.4f,", key, value)
 					}
-				}
+                }
 				for i := 1; i <= 23; i++ {
 					json += fmt.Sprintf("\"t%d\":%0.4f,", i, t[i])
 				}
@@ -386,22 +400,26 @@ func getTibberPrices() {
 				}
 			}
 
-			if tomorrow[10] != float64(0) && !bN {
-//				n = append(n, today[21])
-//				n = append(n, today[22])
-//				n = append(n, today[23])
-				for i := 0; i <= 5; i++ {
-					n = append(n, tomorrow[i])
-				}
+			if tomorrow["030"] != float64(0) && !bN {
+                for key, value := range tomorrow {
+                	if key < "070" {
+                		n = append(n, value)
+                 	}
+                }
+                for key, value := range today {
+                	if key > "210" {
+                		n = append(n, value)
+                 	}
+                }
 				n = SortASC(n)
 
 				json = "{"
-				for i := 0; i < 6; i++ {
-					json += fmt.Sprintf("\"n%d\":%0.4f,", i+1, n[i])
+				for i := 0; i < 8; i++ {
+					json += fmt.Sprintf("\"n%d\":%0.4f,", i+1, n[i*4+3])
 				}
-				json += fmt.Sprintf("\"n%d\":%0.4f}", 6, n[5])
+				json += fmt.Sprintf("\"n9\":%0.4f}",n[38])
 
-				//			fmt.Println(json)
+//				fmt.Println(json)
 
 				token := mclient.Publish(topic, 0, false, string(json))
 				token.Wait()
@@ -447,7 +465,7 @@ func getTibberSubUrl() {
 }
 
 func getTibberHomeId() int {
-	var homeid string 
+	var homeid string
 	var power string = "0.001"
 	var tibberquery string = `{ "query": "{viewer {homes {id features {realTimeConsumptionEnabled } } } }"}`
 	// Create a Resty Client
